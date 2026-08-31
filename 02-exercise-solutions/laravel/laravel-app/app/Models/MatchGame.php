@@ -40,8 +40,15 @@ class MatchGame extends Model
         return $this->belongsTo(Venue::class);
     }
 
+    public function players() {
+        return $this->belongsToMany(Player::class)
+            ->withPivot('position', 'status')
+            ->withTimestamps();
+    }
+
     public function winner()
     {
         return $this->belongsTo(Team::class, 'winner_team_id');
     }
+
 }
