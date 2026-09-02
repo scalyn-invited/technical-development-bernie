@@ -27,4 +27,10 @@ Route::middleware('check-custom-header')->group(function () {
     Route::get('/posts/{post}/edit', [BuggyPostController::class, 'edit']);
     Route::put('/posts/{post}', [BuggyPostController::class, 'update']);
     Route::delete('/posts/{post}', [BuggyPostController::class, 'destroy']);
+    
+});
+
+
+Route::prefix('api')->group(function () {
+    Route::apiResource('orders', App\Http\Controllers\OrderController::class);
 });

@@ -15,6 +15,11 @@ class CheckCustomHeader
      */
     public function handle(Request $request, Closure $next): Response
     {
+        // Skip API routes
+        if ($request->is('api/*')) {
+            return $next($request);
+        }
+
         if (!$request->hasHeader('X-Custom-Header')) {
             return response()->json([
                 'error' => 'Missing required header: X-Custom-Header'
