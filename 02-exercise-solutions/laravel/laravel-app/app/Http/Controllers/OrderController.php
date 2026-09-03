@@ -21,7 +21,7 @@ class OrderController extends Controller
         ], $status);
     }
 
-    public function index()
+    public function index(Request $request)
     {
         $orders = Order::paginate(10);
         return new OrderResourceCollection($orders);
@@ -29,40 +29,33 @@ class OrderController extends Controller
 
     public function store(StoreOrderRequest $request)
     {
-        $order = Order::create($request->validated());
+        $this->authorize('create', Order::class);
+
+        $validated = $request->validated();
+        $validated['user_id'] = $request->user()->id;
+        $order = Order::create($validated);
+
         return (new OrderResource($order))->response()->setStatusCode(201);
     }
 
-    public function show($id)
+    public function show(Request $request, Order $order)
     {
-        $order = Order::find($id);
-        
-        if (!$order) {
-            return $this->errorResponse('not_found', 'Order not found', [], 404);
-        }
+        $this->authorize('view', $order);
 
         return new OrderResource($order);
     }
 
-    public function update(StoreOrderRequest $request, $id)
+    public function update(StoreOrderRequest $request, Order $order)
     {
-        $order = Order::find($id);
-        
-        if (!$order) {
-            return $this->errorResponse('not_found', 'Order not found', [], 404);
-        }
+        $this->authorize('update', $order);
 
         $order->update($request->validated());
         return new OrderResource($order);
     }
 
-    public function destroy($id)
+    public function destroy(Request $request, Order $order)
     {
-        $order = Order::find($id);
-        
-        if (!$order) {
-            return $this->errorResponse('not_found', 'Order not found', [], 404);
-        }
+        $this->authorize('delete', $order);
 
         $order->delete();
         return response()->noContent();

@@ -11,6 +11,8 @@ class DatabaseSeeder extends Seeder
 {
     public function run(): void
     {
+        $this->call(UserSeeder::class);
+
         // Create 10 customers, each with 25 orders, each with 5 items
         Customer::factory(10)
             ->has(Order::factory(25)

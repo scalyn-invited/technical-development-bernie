@@ -9,8 +9,13 @@ class Order extends Model
 {
     use HasFactory;
 
-    protected $fillable = ['customer_id', 'total', 'status', 'placed_at'];
+    protected $fillable = ['customer_id', 'user_id', 'total', 'status', 'placed_at'];
     protected $dates = ['placed_at'];
+
+    public function user()
+    {
+        return $this->belongsTo(User::class);
+    }
 
     public function customer()
     {
