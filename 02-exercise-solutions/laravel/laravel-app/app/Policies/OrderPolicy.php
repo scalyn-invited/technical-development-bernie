@@ -9,10 +9,7 @@ class OrderPolicy
 {
     public function viewAny(User $user): bool
     {
-        if ($user->role === 'approver') {
-            return true;
-        }
-        return false;
+        return true;
     }
 
     public function view(User $user, Order $order): bool
