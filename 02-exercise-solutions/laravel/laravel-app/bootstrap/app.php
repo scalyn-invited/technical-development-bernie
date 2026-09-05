@@ -16,11 +16,23 @@ return Application::configure(basePath: dirname(__DIR__))
             'api/*',
         ]);
 
+        // Guests on API routes must surface as AuthenticationException (401), not a
+        // redirect to the nonexistent `login` route, which would throw and become a 500.
+        $middleware->redirectGuestsTo(
+            fn ($request) => $request->is('api/*') ? null : route('login')
+        );
+
         $middleware->api(append: [
             \Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
+        // API clients may omit an Accept header; without this the unauthenticated
+        // handler redirects to the nonexistent `login` route and 401s become 500s.
+        $exceptions->shouldRenderJsonWhen(
+            fn ($request, Throwable $e) => $request->is('api/*') || $request->expectsJson()
+        );
+
         $exceptions->renderable(function (Throwable $e, $request) {
             if ($request->is('api/*') || $request->expectsJson()) {
                 if ($e instanceof \Illuminate\Auth\AuthenticationException) {
@@ -66,6 +78,15 @@ return Application::configure(basePath: dirname(__DIR__))
                             'message' => 'Unauthenticated',
                             'details' => [],
                         ], 401);
+                    }
+
+                    if ($e->getStatusCode() === 404) {
+                        return response()->json([
+                            'error' => true,
+                            'code' => 'not_found',
+                            'message' => 'Resource not found.',
+                            'details' => [],
+                        ], 404);
                     }
                 }
             }

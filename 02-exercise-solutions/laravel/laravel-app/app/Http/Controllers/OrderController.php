@@ -23,7 +23,14 @@ class OrderController extends Controller
 
     public function index(Request $request)
     {
-        $orders = Order::paginate(10);
+        $this->authorize('viewAny', Order::class);
+
+        $user = $request->user();
+
+        $orders = $user->role === 'approver'
+            ? Order::paginate(10)
+            : Order::where('user_id', $user->id)->paginate(10);
+
         return new OrderResourceCollection($orders);
     }
 

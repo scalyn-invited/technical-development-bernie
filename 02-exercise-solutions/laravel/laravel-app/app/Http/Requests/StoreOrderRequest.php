@@ -26,7 +26,7 @@ class StoreOrderRequest extends FormRequest
             'customer_id' => 'required|exists:customers,id',
             'total' => 'required|numeric|min:0.01',
             'status' => 'required|in:pending,completed,cancelled',
-            'placed_at' => 'nullable|date',
+            'placed_at' => 'required|date',
         ];
     }
 }
