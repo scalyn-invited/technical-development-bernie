@@ -151,4 +151,89 @@ Written down now rather than discovered in Week 4.
 
 ---
 
-*Sections for the permission matrix (Day 11), the endpoint table (Day 12) and the business rules (Day 13) follow as they are built.*
+## 7. Authentication and permissions (Day 11)
+
+### Authentication
+
+Laravel Sanctum, API tokens. Four endpoints:
+
+| Method | Path | Auth | Success |
+|---|---|---|---|
+| `POST` | `/api/register` | public, throttled 5/min by IP | `201` + token |
+| `POST` | `/api/login` | public, throttled 5/min by **email + IP** | `200` + token |
+| `POST` | `/api/logout` | token | `200` |
+| `GET` | `/api/me` | token | `200` |
+
+Three decisions worth stating:
+
+- **`register` does not accept a `role`.** The Day 8 version took an optional `role` field, which put the entire authorisation model one payload field away from being bypassed. Roles are seeded; registration always produces a `member`.
+- **Login failure is identical for an unknown email and a wrong password**, so the endpoint cannot be used to enumerate accounts.
+- **Login throttling is keyed on email *and* IP, not IP alone.** A plain `throttle:5,1` counts every attempt from an address, successes included. This is an internal tool whose users share one office IP, so IP-only keying means one person guessing at their own password locks out the team. The named `login` limiter lives in `AppServiceProvider`.
+
+**Logout revokes only the token that made the request.** Day 8 left open why Sanctum keeps earlier tokens alive on re-login; the decision taken here is that signing out on one device must not sign the user out everywhere.
+
+### The permission matrix
+
+Two roles, fixed for the cycle. Evaluated through the real `Gate` against seeded users — see `04-logs/evidence-logs/2026-09-08-day-11.md`.
+
+| Action | administrator | member |
+|---|---|---|
+| View the skill catalogue | allow | allow |
+| Create a skill | allow | **deny** |
+| Rename or deactivate a skill | allow | **deny** |
+| **Delete a skill** | **deny** | **deny** |
+| List plans | allow | allow *(scoped to their own — see below)* |
+| Read own plan | allow | allow |
+| Read another member's plan | allow | **deny** |
+| Create a plan | allow | **deny** |
+| Update another member's plan | allow | **deny** |
+| View own comparison | allow | allow |
+| Record a score | allow | **deny** |
+| Amend a score | allow | **deny** |
+| Log a week | allow | **deny** |
+| Close a week | allow | **deny** |
+
+Two rows carry reasoning that is not obvious from the table:
+
+- **Nobody deletes a skill, including an administrator.** `restrictOnDelete` already refuses this at the database level; the Policy states the same rule at the authorisation level so the refusal arrives as a 403 rather than a database error surfacing as a 500.
+- **`viewAny` on plans is `allow` for both roles.** The member's *list* is narrowed by the query (Day 12), not by the Policy. Returning 403 to "show me what I am allowed to see" is the wrong answer; an empty or single-row list is the right one.
+
+### The integrity rule
+
+> **Nobody may record, amend or close any assessment or weekly entry on their own development plan — administrator included.**
+
+Self-scoring does not merely look bad; it makes the improvement delta self-reported, which is the one number the tool exists to produce. It is therefore a Policy denial returning 403, not an omission from the UI, because the UI is not the boundary.
+
+Implemented as a second condition on every write policy: `$user->isAdministrator() && $user->id !== $plan->user_id`. Verified against a full administrator holding a plan of their own — all five own-plan actions denied, while the same administrator acting on another member's plan is allowed, so the denial is the rule rather than a broken policy.
+
+`WeeklyEntry` writes are governed by the same rule as scores. A weekly entry carries an `outcome_score`, so it is a scoring action even though it reads as progress tracking; treating it as anything softer would leave a hole straight through the rule.
+
+### What is authorisation and what is not
+
+The Policies answer **"is this your call?"**. They deliberately do not answer **"is this the right moment?"** — baseline immutability after activation, contiguous week numbers, a final requiring a matching baseline. Those are state-machine rules and belong to `ProgrammeProgressionService` on Day 13. Keeping them apart means a 403 always means *not your call* and never *wrong moment*, which is the difference between an error a user can act on and one they cannot.
+
+### The error envelope
+
+The Day 7 shape, carried forward unchanged and now used by every failure path:
+
+```json
+{ "error": true, "code": "...", "message": "...", "details": [] }
+```
+
+| Code | Status | Raised by |
+|---|---|---|
+| `unauthenticated` | 401 | no token, or a revoked or malformed one |
+| `invalid_credentials` | 401 | login rejected |
+| `forbidden` | 403 | any Policy denial |
+| `validation_failed` | 422 | Form Request or inline validation |
+| `not_found` | 404 | unresolved route-model binding |
+| `method_not_allowed` | 405 | wrong verb |
+| `too_many_requests` | 429 | throttled |
+
+`invalid_credentials` is separate from `unauthenticated` on purpose. Day 8 signalled a rejected login with `ValidationException::withMessages()->status(401)`, which produced `code: "validation_failed"` alongside HTTP 401 — the shape was right and the meaning was wrong. The frontend needs to tell an expired session from a mistyped password (Day 15), and `code` is the field it will key on.
+
+**An unauthorised read returns 403, not 404.** Hiding the existence of another member's plan is not a threat this tool defends against, and a 404 there would make a real bug indistinguishable from a permission denial.
+
+---
+
+*Sections for the endpoint table (Day 12) and the business rules (Day 13) follow as they are built.*
