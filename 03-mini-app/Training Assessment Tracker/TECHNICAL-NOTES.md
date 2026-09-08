@@ -74,8 +74,8 @@ Four tables beyond the shipped `users`.
 | `week_number` | unsignedTinyInteger | |
 | `skill_id` | FK, **restrictOnDelete** | |
 | `objective` | text | |
-| `evidence` | text, nullable | `required_if:status,closed` (Day 12) |
-| `outcome_score` | decimal(5,2), nullable | `required_if:status,closed` (Day 12) |
+| `evidence` | text, nullable | `required_if:status,closed` — see §8 |
+| `outcome_score` | decimal(5,2), nullable | `required_if:status,closed` — see §8 |
 | `status` | enum(`planned`,`evidenced`,`closed`), default `planned` | |
 | `recorded_by` | FK → `users`, **nullOnDelete** | |
 | `closed_at` | timestamp, nullable | |
@@ -133,7 +133,7 @@ Written down now rather than discovered in Week 4.
 4. **Two focus skills in one week.** `unique(plan, week_number)` permits exactly one entry per week.
 5. **Score history.** Baseline corrections in draft overwrite in place. There is no audit row, so "what did this baseline say before it was corrected?" is unanswerable. Acceptable while baselines are immutable after activation.
 6. **A departed member's record.** `cascadeOnDelete` on `user_id` means deleting a user erases their plan, scores and weekly entries outright. There are no soft deletes anywhere in the schema. For one cycle this is correct; for anything retained it would be data loss.
-7. **Score range at the database level.** `decimal(5,2)` accepts up to 999.99. The 0–100 rule lives in validation only (Day 12), so a direct database write or a seeder could store a score the API would reject.
+7. **Score range at the database level.** `decimal(5,2)` accepts up to 999.99. The 0–100 rule lives in validation only (§8), so a direct database write or a seeder could store a score the API would reject.
 8. **Structured gap analysis.** `key_gaps` and `weekly_focus` are free text, so "how many plans name testing as a gap" is not a query.
 
 ---
@@ -196,7 +196,7 @@ Two roles, fixed for the cycle. Evaluated through the real `Gate` against seeded
 Two rows carry reasoning that is not obvious from the table:
 
 - **Nobody deletes a skill, including an administrator.** `restrictOnDelete` already refuses this at the database level; the Policy states the same rule at the authorisation level so the refusal arrives as a 403 rather than a database error surfacing as a 500.
-- **`viewAny` on plans is `allow` for both roles.** The member's *list* is narrowed by the query (Day 12), not by the Policy. Returning 403 to "show me what I am allowed to see" is the wrong answer; an empty or single-row list is the right one.
+- **`viewAny` on plans is `allow` for both roles.** The member's *list* is narrowed by the query (§8), not by the Policy. Returning 403 to "show me what I am allowed to see" is the wrong answer; an empty or single-row list is the right one.
 
 ### The integrity rule
 
@@ -229,6 +229,7 @@ The Day 7 shape, carried forward unchanged and now used by every failure path:
 | `not_found` | 404 | unresolved route-model binding |
 | `method_not_allowed` | 405 | wrong verb |
 | `too_many_requests` | 429 | throttled |
+| `conflict` | 409 | a unique constraint reached at the database — see §8 |
 
 `invalid_credentials` is separate from `unauthenticated` on purpose. Day 8 signalled a rejected login with `ValidationException::withMessages()->status(401)`, which produced `code: "validation_failed"` alongside HTTP 401 — the shape was right and the meaning was wrong. The frontend needs to tell an expired session from a mistyped password (Day 15), and `code` is the field it will key on.
 
@@ -236,4 +237,109 @@ The Day 7 shape, carried forward unchanged and now used by every failure path:
 
 ---
 
-*Sections for the endpoint table (Day 12) and the business rules (Day 13) follow as they are built.*
+## 8. The API (Day 12)
+
+### The endpoint table
+
+Twelve routes in total: the four authentication endpoints in §7, and the eight below. Every response is shaped by an API Resource; every input is validated by a Form Request; every failure returns the §7 envelope.
+
+| Method | Path | Auth | Success | Notes |
+|---|---|---|---|---|
+| `GET` | `/api/skills` | token | `200` | `?active=` filter, paginated |
+| `POST` | `/api/skills` | token · administrator | `201` | |
+| `PATCH` | `/api/skills/{skill}` | token · administrator | `200` | rename or deactivate |
+| `GET` | `/api/plans` | token | `200` | `?status=` filter, paginated; **a member sees only their own** |
+| `GET` | `/api/plans/{plan}` | token · policy | `200` | plan with assessments and weekly entries |
+| `POST` | `/api/plans/{plan}/assessments` | token · **integrity rule** | `201` | baseline or final |
+| `POST` | `/api/plans/{plan}/weeks` | token · **integrity rule** | `201` | always created `planned` |
+| `PATCH` | `/api/plans/{plan}/weeks/{week}` | token · **integrity rule** | `200` | evidence, outcome, close |
+
+There is **no `DELETE` anywhere**. Skills retire by deactivation, and plans, assessments and weekly entries are not deletable through the API at all — so `DELETE` returns `405` from an unmatched route rather than `403` from a route that should not exist.
+
+There is also **no `POST /plans`**. Plans are created by the administrator outside these eight endpoints for this cycle; adding the endpoint would be four lines and no new concepts, and it was left out to keep the day's scope to the card.
+
+### Where authorisation is decided, and why it is not in the controller
+
+Every write endpoint decides authorisation in `FormRequest::authorize()`, not in the controller body. This is an ordering decision, not a tidiness one.
+
+Laravel's `validateResolved()` runs `prepareForValidation()`, then `authorize()`, then the rules. A `Gate::authorize()` call left in the controller body therefore runs *after* validation, so a member posting a malformed score is told `422` — and a `422` describes the shape of a payload the caller may never send. Moving the check into `authorize()` makes it `403`, which is the only thing that caller is entitled to learn.
+
+The two reads with no input to validate (`plans.show`) keep `Gate::authorize()` in the controller, because there is no Form Request to put it in.
+
+### Validation decisions
+
+| Decision | Reasoning |
+|---|---|
+| **Query strings get Form Requests too** | `?status=archived` is `422` naming the parameter. A filter that fails quietly is worse than one that fails loudly, because the caller believes the answer. |
+| **`?active=true` is normalised before validation** | Laravel's `boolean` rule accepts `true, false, 1, 0, "1", "0"` and **rejects the strings `"true"` and `"false"`** — it is written for form posts, where a browser sends 1 or 0. A query string is not a form post. `prepareForValidation()` normalises with `filter_var`, so all four spellings work and `?active=maybe` is still a `422`. JSON bodies need none of this: `{"is_active": false}` carries a real boolean. |
+| **`per_page` is bounded to 1–100** | Unbounded, one request asking for 100000 rows loads the table into memory and hands pagination back to nobody. |
+| **`score` and `outcome_score` are `between:0,100`** | This is the **only** place the range exists. The column is `decimal(5,2)`, which accepts 999.99 — see §5.7. |
+| **`week_number` is `between:1,255`** | Matched to the `unsignedTinyInteger` column exactly. Left at `integer`, week 300 passes validation and the database is asked to hold a value the column cannot. |
+| **`POST /weeks` does not accept `status`** | A week is always created `planned`. Accepting it would let a caller POST an already-closed week, skipping the transition and every rule attached to it — the same bug class as Day 8's `register()` accepting a `role`. |
+| **`created_by`, `recorded_by`, `recorded_at`, `closed_at` are never accepted from the client** | They come from the token and the clock. A score whose author the client can nominate is not audit metadata. |
+| **The composite `unique(plan, skill, type)` is restated as a validation rule** | The Day 10 constraint exists at the database. Restating it in the Form Request is what turns the second identical baseline into a `422` the caller can act on instead of a `500`. |
+| **Enums validate with `Rule::enum`** | Against the same backed enum the column casts to, so the set of valid inputs cannot drift from the set of valid states. |
+
+### The conditional rule, and the correction it needed
+
+The card prescribes `evidence` and `outcome_score` as `required_if:status,closed` — a week may be saved as a draft objective, but may not be closed empty.
+
+Implemented literally, that rule refuses a correct request. `required_if` inspects the **payload**; the rule it implements is about the **row**. Those coincide only when the caller closes a week in one request. The natural two-step — PATCH the evidence and outcome, then PATCH `{"status":"closed"}` — was rejected `422` for missing fields the row already held.
+
+`UpdateWeeklyEntryRequest::prepareForValidation()` therefore merges the persisted `evidence` and `outcome_score` into the input when the request omits them, so `required_if` is applied to the state the row will actually be in after the write. `rules()` keeps the prescribed rule verbatim, and a week with neither field recorded is still refused — naming both fields.
+
+`required_if` is an **implicit** rule, so it still fires on a field marked `nullable`: sending `"evidence": null` with `"status": "closed"` is refused. That is the case that matters and the one a plain `nullable` would let through.
+
+### Nested routes are scoped
+
+`PATCH /plans/{plan}/weeks/{week}` sits behind `->scopeBindings()`.
+
+Unscoped, `PATCH /plans/1/weeks/10` where week 10 belongs to plan 2 returns **200 and writes to plan 2's row**, having authorised the request against plan 1. That is the integrity rule defeated by a URL: an administrator barred from touching their own plan could edit it by addressing the request through somebody else's. Scoped, the binding fails and the request is a `404`. Measured both ways — evidence log §6.
+
+The child parameter is named `{weekly_entry}` rather than `{week}` because Laravel resolves the parent relationship as `Str::plural(Str::camel($childType))`, so `{week}` would look for a `weeks()` relation that does not exist. The URL segment is `/weeks/{id}` either way — a route parameter's name never appears in the URL.
+
+### `409` and `422` are not the same answer
+
+Both mean "that record already exists". They differ in what the caller should do next.
+
+A `unique` validation rule is check-then-write: a `SELECT`, then later an `INSERT`, with a window in between. Two administrators working the open-weeks queue at the same moment both pass validation, and the loser reaches the database constraint. Before this was handled, that arrived as a **`500` carrying the SQL, the database file path and a full stack trace**.
+
+- **`422 validation_failed`** — the ordinary duplicate. The payload is wrong and the caller must change it.
+- **`409 conflict`** — the race. The payload was not wrong; it lost. The caller should retry, not edit.
+
+`Illuminate\Database\UniqueConstraintViolationException` is the arm that catches the second.
+
+**Known limit.** It is the *only* constraint violation Laravel narrows into its own class. A foreign-key violation — the `restrictOnDelete` on `assessments.skill_id`, for instance — is still a bare `QueryException` and would leave the envelope as a `500`. No endpoint can reach it today because nothing deletes, but it is an open hole in the claim that every failure path uses the envelope.
+
+### What the API does **not** enforce
+
+Day 12 answers three questions and no more: *is this payload well-formed*, *is this your call*, and *what does the response look like*. Every rule about **when** something may happen belongs to `ProgrammeProgressionService` on Day 13, and none of it is implemented here:
+
+- plan transitions, and a completed plan never reopening
+- activation requiring a baseline for every skill on the plan
+- baseline immutability once the plan is active
+- weekly entry transitions, and a closed week being read-only
+- contiguous week numbers
+- a `final` requiring a matching `baseline`
+- writing the final set and completing the plan in one transaction
+- refusing to deactivate a skill that is the focus of an open week
+
+Two of these are visible in today's evidence behaving in ways Day 13 must stop: a `final` was accepted on a plan with no matching baseline, and a closed week is still editable. They are recorded rather than hidden.
+
+Keeping the two apart is what makes a `403` mean *not your call* and a `422` mean *not this payload* — never *not yet*. An error a user cannot act on is worse than no error at all.
+
+### Measured cost
+
+Queries per request, measured through the real kernel with authentication warmed up:
+
+| Endpoint | Queries |
+|---|---|
+| `GET /api/skills` | 2 |
+| `GET /api/plans` | 3, whether it returns one plan or four |
+| `GET /api/plans/{plan}` | 5–6, whether the plan holds 3 assessments or 12 |
+
+The plan read traverses the same rows lazily in **22 queries**. Eager loading in the controller and `whenLoaded()` in the Resources is what holds it at 6, and the Resource guard is the half that matters: a relation the controller forgets to load comes back as an absent key rather than as a query repeated once per row.
+
+---
+
+*Section for the business rules (Day 13) follows as it is built.*
