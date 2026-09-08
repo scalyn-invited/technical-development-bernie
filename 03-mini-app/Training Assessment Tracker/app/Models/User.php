@@ -2,9 +2,12 @@
 
 namespace App\Models;
 
-// use Illuminate\Contracts\Auth\MustVerifyEmail;
+use App\Enums\UserRole;
 use Database\Factories\UserFactory;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 
@@ -22,6 +25,7 @@ class User extends Authenticatable
         'name',
         'email',
         'password',
+        'role',
     ];
 
     /**
@@ -44,6 +48,38 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'role' => UserRole::class,
         ];
+    }
+
+    /** One plan per member for this single programme cycle. */
+    public function developmentPlan(): HasOne
+    {
+        return $this->hasOne(DevelopmentPlan::class);
+    }
+
+    public function createdSkills(): HasMany
+    {
+        return $this->hasMany(Skill::class, 'created_by');
+    }
+
+    public function recordedAssessments(): HasMany
+    {
+        return $this->hasMany(Assessment::class, 'recorded_by');
+    }
+
+    public function recordedWeeklyEntries(): HasMany
+    {
+        return $this->hasMany(WeeklyEntry::class, 'recorded_by');
+    }
+
+    public function isAdministrator(): bool
+    {
+        return $this->role === UserRole::Administrator;
+    }
+
+    public function scopeRole(Builder $query, UserRole $role): Builder
+    {
+        return $query->where('role', $role);
     }
 }
