@@ -5,7 +5,9 @@
 
 # Node/npm
 node_modules/
-package-lock.json
+# package-lock.json is deliberately NOT ignored, for the same reason as
+# composer.lock below: npm's guidance is that an application commits its lock
+# file so `npm ci` reproduces the exact dependency tree that was tested.
 npm-debug.log
 
 # PHP/Composer
