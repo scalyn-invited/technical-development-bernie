@@ -4,6 +4,7 @@ use App\Exceptions\InvalidCredentialsException;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Auth\AuthenticationException;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -74,6 +75,26 @@ return Application::configure(basePath: dirname(__DIR__))
             // from a permission denial.
             if ($e instanceof ModelNotFoundException) {
                 return $envelope('not_found', 'Resource not found.', [], 404);
+            }
+
+            // The concurrency answer, and the one failure path that was a 500.
+            //
+            // Every `unique` validation rule is check-then-write: two requests
+            // posting the same week number both pass validation, and the loser
+            // reaches the database constraint. Laravel narrows that collision to
+            // UniqueConstraintViolationException, so it arrives in the envelope
+            // like everything else instead of as a stack trace.
+            //
+            // 409 and not 422, because the payload was not wrong — it lost a
+            // race. A caller who genuinely sent a duplicate still gets 422 from
+            // the Form Request; a caller who gets 409 should retry, not edit.
+            if ($e instanceof UniqueConstraintViolationException) {
+                return $envelope(
+                    'conflict',
+                    'That record already exists.',
+                    [],
+                    409
+                );
             }
 
             if ($e instanceof HttpExceptionInterface) {
