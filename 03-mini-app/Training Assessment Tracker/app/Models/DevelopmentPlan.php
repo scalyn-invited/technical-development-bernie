@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\PlanStatus;
+use Database\Factories\DevelopmentPlanFactory;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -12,7 +13,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class DevelopmentPlan extends Model
 {
-    /** @use HasFactory<\Database\Factories\DevelopmentPlanFactory> */
+    /** @use HasFactory<DevelopmentPlanFactory> */
     use HasFactory;
 
     protected $fillable = [

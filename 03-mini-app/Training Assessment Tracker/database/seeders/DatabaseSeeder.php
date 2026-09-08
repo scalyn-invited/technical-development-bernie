@@ -4,7 +4,6 @@ namespace Database\Seeders;
 
 use App\Enums\AssessmentType;
 use App\Enums\PlanStatus;
-use App\Enums\WeeklyEntryStatus;
 use App\Models\Assessment;
 use App\Models\DevelopmentPlan;
 use App\Models\Skill;
