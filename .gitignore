@@ -10,7 +10,12 @@ npm-debug.log
 
 # PHP/Composer
 vendor/
-composer.lock
+# composer.lock is deliberately NOT ignored. Composer's own guidance is that an
+# application commits its lock file: it is what makes `composer install`
+# reproduce the exact dependency versions that were tested. Without it, CI
+# (Day 17) resolves whatever is newest at build time, and a clean clone
+# (Day 18) can install a different tree from the one this repository was
+# verified against. Only libraries omit it.
 
 # IDEs
 .vscode/
