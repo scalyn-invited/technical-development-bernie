@@ -10,6 +10,7 @@ use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
 
 return Application::configure(basePath: dirname(__DIR__))
@@ -92,7 +93,8 @@ return Application::configure(basePath: dirname(__DIR__))
             //
             // 409 and not 422, because the payload was not wrong — it lost a
             // race. A caller who genuinely sent a duplicate still gets 422 from
-            // the Form Request; a caller who gets 409 should retry, not edit.
+            // the Form Request; a caller receiving 409 should re-read state
+            // and reconcile the conflict before deciding whether to retry.
             if ($e instanceof UniqueConstraintViolationException) {
                 return $envelope(
                     'conflict',
@@ -103,16 +105,29 @@ return Application::configure(basePath: dirname(__DIR__))
             }
 
             if ($e instanceof HttpExceptionInterface) {
-                return match ($e->getStatusCode()) {
+                $status = $e->getStatusCode();
+                $response = match ($status) {
                     401 => $envelope('unauthenticated', 'Unauthenticated.', [], 401),
                     403 => $envelope('forbidden', 'This action is unauthorized.', [], 403),
                     404 => $envelope('not_found', 'Resource not found.', [], 404),
                     405 => $envelope('method_not_allowed', 'Method not allowed.', [], 405),
                     429 => $envelope('too_many_requests', 'Too many requests.', [], 429),
-                    default => null,
+                    500 => $envelope('internal_error', 'An unexpected error occurred.', [], 500),
+                    default => $envelope(
+                        'http_error',
+                        Response::$statusTexts[$status] ?? 'Request failed.',
+                        [],
+                        $status
+                    ),
                 };
+
+                // Keep protocol headers such as Allow and Retry-After.
+                return $response->withHeaders($e->getHeaders());
             }
 
-            return null;
+            // Rendering does not suppress Laravel's normal exception reporting.
+            // Never expose exception messages, SQL, bindings or traces to clients,
+            // including when APP_DEBUG is enabled.
+            return $envelope('internal_error', 'An unexpected error occurred.', [], 500);
         });
     })->create();

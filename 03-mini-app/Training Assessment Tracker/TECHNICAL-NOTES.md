@@ -216,12 +216,13 @@ with data and summary; other domain responses use Resources.
 On conflict, re-read current state and reconcile intent before retrying. A blind
 retry does not repair duplicate records or an invalid transition.
 
-**Observed source limitation:** bootstrap/app.php still returns null for unhandled
-exceptions; a generic 500 is therefore not guaranteed to use the four-field
-envelope. The learner previously reported completing that exercise, but the
-current checked-out handler does not show the fallback. This documentation records
-the source as observed; fixing the generic handler is separate from Day 14 tests.
-Do not expose APP_DEBUG=true outside a private development environment.
+Unexpected API/JSON exceptions now return HTTP 500 with code internal_error,
+message "An unexpected error occurred." and empty details. This holds with debug
+enabled or disabled, and SQL, bindings and exception messages are not returned.
+Laravel's server-side exception reporting remains enabled. HTTP exceptions retain
+their status and protocol headers (including Allow and Retry-After); unlisted
+statuses use a safe standard status message. Normal HTML requests retain Laravel's
+HTML renderer. Do not expose APP_DEBUG=true outside private development.
 
 ## 9. Business rules and architecture (Days 13–14)
 
@@ -358,9 +359,6 @@ follows Conventional Commits.
 
 Schema limitations remain in §5. No independent skill assignment, cycle history,
 score audit trail, deletion API, plan-creation API or completed frontend was added.
-Policies do not prevent privileged database access. Generic 500 envelope and
-deployment-engine concurrency still require verification/follow-up.
-
-Day 14's unaided three-minute teach-back and actual client-work transfer note
-must come from the learner. Do not infer them from generated implementation or
-automated test success.
+Policies do not prevent privileged database access. Deployment-engine concurrency
+still requires verification/follow-up. ApiErrorEnvelopeTest verifies the generic
+500 response, retained reporting, SQL redaction, HTTP headers and HTML behavior.
