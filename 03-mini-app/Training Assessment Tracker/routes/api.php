@@ -3,6 +3,7 @@
 use App\Http\Controllers\AssessmentController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\PlanController;
+use App\Http\Controllers\PlanProgressionController;
 use App\Http\Controllers\SkillController;
 use App\Http\Controllers\WeeklyEntryController;
 use Illuminate\Support\Facades\Route;
@@ -23,6 +24,10 @@ Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:lo
 | returns the 401 envelope without one.
 */
 Route::middleware('auth:sanctum')->group(function () {
+    Route::post('/plans/{plan}/activate', [PlanProgressionController::class, 'activate']);
+    Route::post('/plans/{plan}/complete', [PlanProgressionController::class, 'complete']);
+    Route::get('/plans/{plan}/comparison', [PlanProgressionController::class, 'comparison']);
+    Route::patch('/plans/{plan}/assessments/{assessment}', [AssessmentController::class, 'update'])->scopeBindings();
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/me', [AuthController::class, 'me']);
 

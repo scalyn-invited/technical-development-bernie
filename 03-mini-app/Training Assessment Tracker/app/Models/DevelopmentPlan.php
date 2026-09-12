@@ -45,6 +45,12 @@ class DevelopmentPlan extends Model
         return $this->hasMany(Assessment::class);
     }
 
+    /** Baselines define plan membership, including retired catalogue skills. */
+    public function baselineAssessments(): HasMany
+    {
+        return $this->assessments()->where('type', 'baseline');
+    }
+
     public function weeklyEntries(): HasMany
     {
         return $this->hasMany(WeeklyEntry::class);

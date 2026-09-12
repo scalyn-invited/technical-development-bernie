@@ -1,6 +1,7 @@
 <?php
 
 use App\Exceptions\InvalidCredentialsException;
+use App\Exceptions\ProgressionConflict;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Auth\AuthenticationException;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
@@ -50,6 +51,10 @@ return Application::configure(basePath: dirname(__DIR__))
 
             if ($e instanceof AuthenticationException) {
                 return $envelope('unauthenticated', 'Unauthenticated.', [], 401);
+            }
+
+            if ($e instanceof ProgressionConflict) {
+                return $envelope('progression_conflict', $e->getMessage(), [], 409);
             }
 
             // Distinct from `unauthenticated`, which means "no usable token".

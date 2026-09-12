@@ -7,6 +7,7 @@ use App\Http\Requests\StoreSkillRequest;
 use App\Http\Requests\UpdateSkillRequest;
 use App\Http\Resources\SkillResource;
 use App\Models\Skill;
+use App\Services\ProgrammeProgressionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 
@@ -57,9 +58,9 @@ class SkillController extends Controller
      * database, so the route does not exist at all and DELETE returns the 405
      * envelope.
      */
-    public function update(UpdateSkillRequest $request, Skill $skill): SkillResource
+    public function update(UpdateSkillRequest $request, Skill $skill, ProgrammeProgressionService $service): SkillResource
     {
-        $skill->update($request->validated());
+        $skill = $service->updateSkill($skill, $request->user(), $request->validated());
 
         return new SkillResource($skill);
     }
