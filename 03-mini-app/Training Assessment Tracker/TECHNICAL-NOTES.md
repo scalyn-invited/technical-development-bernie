@@ -74,8 +74,8 @@ Four tables beyond the shipped `users`.
 | `week_number` | unsignedTinyInteger | |
 | `skill_id` | FK, **restrictOnDelete** | |
 | `objective` | text | |
-| `evidence` | text, nullable | `required_if:status,closed` — see §8 |
-| `outcome_score` | decimal(5,2), nullable | `required_if:status,closed` — see §8 |
+| `evidence` | text, nullable | Required on closed weeks; validated against locked state |
+| `outcome_score` | decimal(5,2), nullable | Required on closed weeks; validated against locked state |
 | `status` | enum(`planned`,`evidenced`,`closed`), default `planned` | |
 | `recorded_by` | FK → `users`, **nullOnDelete** | |
 | `closed_at` | timestamp, nullable | |
@@ -151,195 +151,216 @@ Written down now rather than discovered in Week 4.
 
 ---
 
-## 7. Authentication and permissions (Day 11)
+## 7. Current authentication and permission matrix
 
-### Authentication
+Sanctum bearer tokens authenticate API calls. Registration always creates a member.
+Logout revokes the calling token. Login is limited by email + IP; registration by IP.
+Policies enforce role and ownership; ProgrammeProgressionService enforces state and
+transaction rules. Administrators cannot score or progress their own plans.
 
-Laravel Sanctum, API tokens. Four endpoints:
-
-| Method | Path | Auth | Success |
-|---|---|---|---|
-| `POST` | `/api/register` | public, throttled 5/min by IP | `201` + token |
-| `POST` | `/api/login` | public, throttled 5/min by **email + IP** | `200` + token |
-| `POST` | `/api/logout` | token | `200` |
-| `GET` | `/api/me` | token | `200` |
-
-Three decisions worth stating:
-
-- **`register` does not accept a `role`.** The Day 8 version took an optional `role` field, which put the entire authorisation model one payload field away from being bypassed. Roles are seeded; registration always produces a `member`.
-- **Login failure is identical for an unknown email and a wrong password**, so the endpoint cannot be used to enumerate accounts.
-- **Login throttling is keyed on email *and* IP, not IP alone.** A plain `throttle:5,1` counts every attempt from an address, successes included. This is an internal tool whose users share one office IP, so IP-only keying means one person guessing at their own password locks out the team. The named `login` limiter lives in `AppServiceProvider`.
-
-**Logout revokes only the token that made the request.** Day 8 left open why Sanctum keeps earlier tokens alive on re-login; the decision taken here is that signing out on one device must not sign the user out everywhere.
-
-### The permission matrix
-
-Two roles, fixed for the cycle. Evaluated through the real `Gate` against seeded users — see `04-logs/evidence-logs/2026-09-08-day-11.md`.
-
-| Action | administrator | member |
+| Action | Administrator | Member |
 |---|---|---|
-| View the skill catalogue | allow | allow |
-| Create a skill | allow | **deny** |
-| Rename or deactivate a skill | allow | **deny** |
-| **Delete a skill** | **deny** | **deny** |
-| List plans | allow | allow *(scoped to their own — see below)* |
-| Read own plan | allow | allow |
-| Read another member's plan | allow | **deny** |
-| Create a plan | allow | **deny** |
-| Update another member's plan | allow | **deny** |
-| View own comparison | allow | allow |
-| Record a score | allow | **deny** |
-| Amend a score | allow | **deny** |
-| Log a week | allow | **deny** |
-| Close a week | allow | **deny** |
+| Read skills | Yes | Yes |
+| Create/update/deactivate skills | Yes, subject to open-week guard | No |
+| List/read plans and comparison | Any plan | Own plan only |
+| Activate/complete plan | Other member's plan only | No |
+| Record/correct baseline | Other member's plan only; draft | No |
+| Create/update/close week | Other member's plan only; active | No |
+| Delete skills/assessments/plans/weeks | No exposed endpoint | No exposed endpoint |
 
-Two rows carry reasoning that is not obvious from the table:
+A create-plan policy exists, but no create-plan HTTP endpoint is implemented;
+seeders or a controlled local fixture currently create plans.
 
-- **Nobody deletes a skill, including an administrator.** `restrictOnDelete` already refuses this at the database level; the Policy states the same rule at the authorisation level so the refusal arrives as a 403 rather than a database error surfacing as a 500.
-- **`viewAny` on plans is `allow` for both roles.** The member's *list* is narrowed by the query (§8), not by the Policy. Returning 403 to "show me what I am allowed to see" is the wrong answer; an empty or single-row list is the right one.
+## 8. Current endpoint table
 
-### The integrity rule
+All paths below start with /api. Protected requests use Authorization: Bearer TOKEN
+and Accept: application/json. Errors for recognized paths use
+{error, code, message, details}. Authorization precedes input validation through
+Form Requests or explicit Gate calls in the service/controller.
 
-> **Nobody may record, amend or close any assessment or weekly entry on their own development plan — administrator included.**
+| Method | Path | Access | Success |
+|---|---|---|---|
+| POST | /register | Public, throttled | 201 + token |
+| POST | /login | Public, throttled | 200 + token |
+| POST | /logout | Authenticated | 200 |
+| GET | /me | Authenticated | 200 |
+| GET | /skills | Authenticated; active filter, pagination | 200 |
+| POST | /skills | Administrator | 201 |
+| PATCH | /skills/{skill} | Administrator | 200 |
+| GET | /plans | Authenticated; scoped list, status filter | 200 |
+| GET | /plans/{plan} | Read policy | 200 |
+| POST | /plans/{plan}/assessments | Integrity rule; draft baseline only | 201 |
+| PATCH | /plans/{plan}/assessments/{assessment} | Integrity rule; draft baseline correction | 200 |
+| POST | /plans/{plan}/activate | Integrity rule | 200 |
+| POST | /plans/{plan}/complete | Integrity rule; entire final set | 200 |
+| GET | /plans/{plan}/comparison | Read policy | 200 |
+| POST | /plans/{plan}/weeks | Integrity rule | 201 |
+| PATCH | /plans/{plan}/weeks/{weekly_entry} | Integrity rule | 200 |
 
-Self-scoring does not merely look bad; it makes the improvement delta self-reported, which is the one number the tool exists to produce. It is therefore a Policy denial returning 403, not an omission from the UI, because the UI is not the boundary.
+Nested assessment/week routes use scopeBindings: a child belonging to another plan
+is 404. Scores and outcome scores are 0–100. Query filters and pagination are
+validated; per_page is limited to 100. The response for comparison is plain JSON
+with data and summary; other domain responses use Resources.
 
-Implemented as a second condition on every write policy: `$user->isAdministrator() && $user->id !== $plan->user_id`. Verified against a full administrator holding a plan of their own — all five own-plan actions denied, while the same administrator acting on another member's plan is allowed, so the denial is the rule rather than a broken policy.
+| Error code | HTTP status |
+|---|---|
+| unauthenticated / invalid_credentials | 401 |
+| forbidden | 403 |
+| not_found | 404 |
+| method_not_allowed | 405 |
+| validation_failed | 422 |
+| too_many_requests | 429 |
+| conflict (database uniqueness) | 409 |
+| progression_conflict (domain rule) | 409 |
 
-`WeeklyEntry` writes are governed by the same rule as scores. A weekly entry carries an `outcome_score`, so it is a scoring action even though it reads as progress tracking; treating it as anything softer would leave a hole straight through the rule.
+On conflict, re-read current state and reconcile intent before retrying. A blind
+retry does not repair duplicate records or an invalid transition.
 
-### What is authorisation and what is not
+**Observed source limitation:** bootstrap/app.php still returns null for unhandled
+exceptions; a generic 500 is therefore not guaranteed to use the four-field
+envelope. The learner previously reported completing that exercise, but the
+current checked-out handler does not show the fallback. This documentation records
+the source as observed; fixing the generic handler is separate from Day 14 tests.
+Do not expose APP_DEBUG=true outside a private development environment.
 
-The Policies answer **"is this your call?"**. They deliberately do not answer **"is this the right moment?"** — baseline immutability after activation, contiguous week numbers, a final requiring a matching baseline. Those are state-machine rules and belong to `ProgrammeProgressionService` on Day 13. Keeping them apart means a 403 always means *not your call* and never *wrong moment*, which is the difference between an error a user can act on and one they cannot.
+## 9. Business rules and architecture (Days 13–14)
 
-### The error envelope
+ProgrammeProgressionService owns transitions and writes. Controllers accept requests
+and shape responses; policies decide whether the caller may act. The service
+reloads and locks the plan inside a transaction so decisions use current state.
 
-The Day 7 shape, carried forward unchanged and now used by every failure path:
+- Plans only move draft → active → completed, and never reopen.
+- Baseline rows define membership. Activation needs a nonempty valid baseline set
+  and no existing finals. There is no independent assignment list against which
+  an omitted intended skill can be detected. This is the deliberate interpretation
+  of the Day 14 “missing baseline” case: empty sets fail, and activation confirms
+  the chosen baseline set.
+- New baselines require active catalogue skills. Corrections change score/note
+  only and are permitted in draft. Active/completed baselines are frozen.
+- Weeks may be created on active plans only. Numbers start at 1, are contiguous,
+  and all preceding weeks must be closed. Focus skills must be active and baselined
+  on the plan. Week number and focus cannot be edited afterward.
+- Weeks move planned → evidenced → closed. Same-state edits are allowed before
+  closure. Evidenced requires nonblank evidence; closed also requires an outcome
+  score (zero is valid). Closed weeks reject every edit.
+- Evidence/outcome checks merge submitted fields with the freshly locked row.
+  The previous pre-validation merge was removed to avoid overwriting newer values
+  with stale route-binding data.
+- Deactivation is rejected while any plan has an open week using the skill.
+  Deactivated skills remain in assessment and comparison responses.
+- Completion requires exactly the baseline skill IDs, no duplicates, valid finals,
+  no pre-existing finals, and all existing weeks closed. It inserts the final batch
+  and sets completed/completed_at in one transaction. A failed insert rolls it all back.
+- There is currently no minimum week count; zero existing weeks passes the
+  all-weeks-closed condition. Direct SQL bypasses these application guards.
+
+Plan writes share a parent-plan lock; skill deactivation/new baseline/new week
+creation share a skill lock. SQLite does not implement SELECT FOR UPDATE. Tests on
+SQLite do not establish MySQL concurrency behavior; verify on the deployment engine.
+
+## 10. Comparison calculator and average movement
+
+ComparisonCalculator is a pure PHP class, tested with PHPUnit Framework TestCase:
+no Laravel application bootstrap, models, factories or database. The service loads
+the scores and labels, then delegates arithmetic to this class.
+
+Scores arrive as fixed two-place decimal strings from Eloquent. Calculations use
+integer hundredths and results are strings. A skill's delta is final minus baseline,
+in percentage points; negative and zero movements are retained. An unrecorded final
+produces null, not zero. An orphan final is rejected by the service.
+
+Average movement is the arithmetic mean of deltas for **matched baseline/final
+pairs only**, rounded once to two places, half away from zero. It is a within-plan
+summary, not team analytics. Compared/pending counts expose the denominator so a
+partial comparison is not mistaken for a completed assessment. With no finals the
+average is null. No delta or average is stored in the database.
+
+Example: 60.25 → 85.10 gives +24.85; 80.00 → 70.00 gives -10.00. A third
+baseline without a final is pending. Average = (24.85 - 10.00) / 2 = 7.43.
+
+GET /plans/{plan}/comparison keeps its existing data array and adds:
 
 ```json
-{ "error": true, "code": "...", "message": "...", "details": [] }
+{
+  "summary": {
+    "compared_skills": 2,
+    "pending_skills": 1,
+    "average_movement": "7.43"
+  }
+}
 ```
 
-| Code | Status | Raised by |
-|---|---|---|
-| `unauthenticated` | 401 | no token, or a revoked or malformed one |
-| `invalid_credentials` | 401 | login rejected |
-| `forbidden` | 403 | any Policy denial |
-| `validation_failed` | 422 | Form Request or inline validation |
-| `not_found` | 404 | unresolved route-model binding |
-| `method_not_allowed` | 405 | wrong verb |
-| `too_many_requests` | 429 | throttled |
-| `conflict` | 409 | a unique constraint reached at the database — see §8 |
+## 11. Run locally from a fresh checkout
 
-`invalid_credentials` is separate from `unauthenticated` on purpose. Day 8 signalled a rejected login with `ValidationException::withMessages()->status(401)`, which produced `code: "validation_failed"` alongside HTTP 401 — the shape was right and the meaning was wrong. The frontend needs to tell an expired session from a mistyped password (Day 15), and `code` is the field it will key on.
+Requirements: PHP 8.2+ with the Laravel-required extensions including PDO SQLite,
+Composer, and Git. Node/npm are only needed for the optional Vite asset build;
+the API and PHPUnit suite do not require a frontend build.
 
-**An unauthorised read returns 403, not 404.** Hiding the existence of another member's plan is not a threat this tool defends against, and a 404 there would make a real bug indistinguishable from a permission denial.
+From the repository root:
 
----
+```powershell
+Set-Location '03-mini-app/Training Assessment Tracker'
+composer install
+```
 
-## 8. The API (Day 12)
+For a **new checkout only**, copy .env.example to .env if .env does not already
+exist, then run php artisan key:generate. Keep DB_CONNECTION=sqlite. Create an
+empty database/database.sqlite file if absent. Do not overwrite an existing
+environment or database. Then:
 
-### The endpoint table
+```powershell
+php artisan migrate
+php artisan db:seed
+php artisan serve --host=127.0.0.1 --port=8000
+```
 
-Twelve routes in total: the four authentication endpoints in §7, and the eight below. Every response is shaped by an API Resource; every input is validated by a Form Request; every failure returns the §7 envelope.
+Run db:seed only against a fresh disposable database; the seeder is not idempotent.
+Never run migrate:fresh on data you intend to keep. The seed administrator is
+admin@example.test with password password (local fixtures only). Login returns
+the bearer token. Use http://127.0.0.1:8000/api as the Postman collection base_url,
+and avoid an environment overriding collection variables.
 
-| Method | Path | Auth | Success | Notes |
-|---|---|---|---|---|
-| `GET` | `/api/skills` | token | `200` | `?active=` filter, paginated |
-| `POST` | `/api/skills` | token · administrator | `201` | |
-| `PATCH` | `/api/skills/{skill}` | token · administrator | `200` | rename or deactivate |
-| `GET` | `/api/plans` | token | `200` | `?status=` filter, paginated; **a member sees only their own** |
-| `GET` | `/api/plans/{plan}` | token · policy | `200` | plan with assessments and weekly entries |
-| `POST` | `/api/plans/{plan}/assessments` | token · **integrity rule** | `201` | baseline or final |
-| `POST` | `/api/plans/{plan}/weeks` | token · **integrity rule** | `201` | always created `planned` |
-| `PATCH` | `/api/plans/{plan}/weeks/{week}` | token · **integrity rule** | `200` | evidence, outcome, close |
+For optional assets: npm ci then npm run build. No completed browser UI exists yet.
 
-There is **no `DELETE` anywhere**. Skills retire by deactivation, and plans, assessments and weekly entries are not deletable through the API at all — so `DELETE` returns `405` from an unmatched route rather than `403` from a route that should not exist.
+## 12. Tests, evidence, and Git history
 
-There is also **no `POST /plans`**. Plans are created by the administrator outside these eight endpoints for this cycle; adding the endpoint would be four lines and no new concepts, and it was left out to keep the day's scope to the card.
+```powershell
+php artisan test
+php artisan test --testsuite=Unit
+php vendor/bin/pint --test
+```
 
-### Where authorisation is decided, and why it is not in the controller
+phpunit.xml uses in-memory SQLite. Day 9 patterns retained: explicit authenticated
+requests, RefreshDatabase for feature tests, assertions on persisted state after
+denials, and database-free PHPUnit tests for isolated logic.
 
-Every write endpoint decides authorisation in `FormRequest::authorize()`, not in the controller body. This is an ordering decision, not a tidiness one.
+Coverage map:
+- PlanProgressionTest: activation and exact finals, role checks, rollback after
+  second insert failure, forbidden repeat transitions and standalone finals.
+- RemainingProgressionTest: full state cycle, immutable records, week ordering,
+  focus/deactivation, scoped corrections, and per-skill comparisons.
+- Day14CoverageTest: draft→completed rejection, score-write integrity, an HTTP
+  cycle starting with baseline creation, and API average/denominator integration.
+- ComparisonCalculatorTest: deltas, matched-pair averages, missing finals, empty
+  input, 0/100 bounds, positive/negative/zero movement and rounding.
 
-Laravel's `validateResolved()` runs `prepareForValidation()`, then `authorize()`, then the rules. A `Gate::authorize()` call left in the controller body therefore runs *after* validation, so a member posting a malformed score is told `422` — and a `422` describes the shape of a payload the caller may never send. Moving the check into `authorize()` makes it `403`, which is the only thing that caller is entitled to learn.
+Day 13 evidence was 15 tests / 97 assertions and learner-reported 13 Postman
+requests passed. Day 14 adds automated coverage; see its evidence log for the final
+run rather than treating older counts as current.
 
-The two reads with no input to validate (`plans.show`) keep `Gate::authorize()` in the controller, because there is no Form Request to put it in.
+Git review: recent feature/fix/docs/chore commits are meaningful and conventional.
+Historical bootstrap commits f1097e3 and 658da88 use “Initialize ...” subjects.
+They are already published; they were not rebased or force-pushed solely to rename
+them. Record these two exceptions rather than claiming every historical commit
+follows Conventional Commits.
 
-### Validation decisions
+## 13. Deliberate exclusions and remaining work
 
-| Decision | Reasoning |
-|---|---|
-| **Query strings get Form Requests too** | `?status=archived` is `422` naming the parameter. A filter that fails quietly is worse than one that fails loudly, because the caller believes the answer. |
-| **`?active=true` is normalised before validation** | Laravel's `boolean` rule accepts `true, false, 1, 0, "1", "0"` and **rejects the strings `"true"` and `"false"`** — it is written for form posts, where a browser sends 1 or 0. A query string is not a form post. `prepareForValidation()` normalises with `filter_var`, so all four spellings work and `?active=maybe` is still a `422`. JSON bodies need none of this: `{"is_active": false}` carries a real boolean. |
-| **`per_page` is bounded to 1–100** | Unbounded, one request asking for 100000 rows loads the table into memory and hands pagination back to nobody. |
-| **`score` and `outcome_score` are `between:0,100`** | This is the **only** place the range exists. The column is `decimal(5,2)`, which accepts 999.99 — see §5.7. |
-| **`week_number` is `between:1,255`** | Matched to the `unsignedTinyInteger` column exactly. Left at `integer`, week 300 passes validation and the database is asked to hold a value the column cannot. |
-| **`POST /weeks` does not accept `status`** | A week is always created `planned`. Accepting it would let a caller POST an already-closed week, skipping the transition and every rule attached to it — the same bug class as Day 8's `register()` accepting a `role`. |
-| **`created_by`, `recorded_by`, `recorded_at`, `closed_at` are never accepted from the client** | They come from the token and the clock. A score whose author the client can nominate is not audit metadata. |
-| **The composite `unique(plan, skill, type)` is restated as a validation rule** | The Day 10 constraint exists at the database. Restating it in the Form Request is what turns the second identical baseline into a `422` the caller can act on instead of a `500`. |
-| **Enums validate with `Rule::enum`** | Against the same backed enum the column casts to, so the set of valid inputs cannot drift from the set of valid states. |
+Schema limitations remain in §5. No independent skill assignment, cycle history,
+score audit trail, deletion API, plan-creation API or completed frontend was added.
+Policies do not prevent privileged database access. Generic 500 envelope and
+deployment-engine concurrency still require verification/follow-up.
 
-### The conditional rule, and the correction it needed
-
-The card prescribes `evidence` and `outcome_score` as `required_if:status,closed` — a week may be saved as a draft objective, but may not be closed empty.
-
-Implemented literally, that rule refuses a correct request. `required_if` inspects the **payload**; the rule it implements is about the **row**. Those coincide only when the caller closes a week in one request. The natural two-step — PATCH the evidence and outcome, then PATCH `{"status":"closed"}` — was rejected `422` for missing fields the row already held.
-
-`UpdateWeeklyEntryRequest::prepareForValidation()` therefore merges the persisted `evidence` and `outcome_score` into the input when the request omits them, so `required_if` is applied to the state the row will actually be in after the write. `rules()` keeps the prescribed rule verbatim, and a week with neither field recorded is still refused — naming both fields.
-
-`required_if` is an **implicit** rule, so it still fires on a field marked `nullable`: sending `"evidence": null` with `"status": "closed"` is refused. That is the case that matters and the one a plain `nullable` would let through.
-
-### Nested routes are scoped
-
-`PATCH /plans/{plan}/weeks/{week}` sits behind `->scopeBindings()`.
-
-Unscoped, `PATCH /plans/1/weeks/10` where week 10 belongs to plan 2 returns **200 and writes to plan 2's row**, having authorised the request against plan 1. That is the integrity rule defeated by a URL: an administrator barred from touching their own plan could edit it by addressing the request through somebody else's. Scoped, the binding fails and the request is a `404`. Measured both ways — evidence log §6.
-
-The child parameter is named `{weekly_entry}` rather than `{week}` because Laravel resolves the parent relationship as `Str::plural(Str::camel($childType))`, so `{week}` would look for a `weeks()` relation that does not exist. The URL segment is `/weeks/{id}` either way — a route parameter's name never appears in the URL.
-
-### `409` and `422` are not the same answer
-
-Both mean "that record already exists". They differ in what the caller should do next.
-
-A `unique` validation rule is check-then-write: a `SELECT`, then later an `INSERT`, with a window in between. Two administrators working the open-weeks queue at the same moment both pass validation, and the loser reaches the database constraint. Before this was handled, that arrived as a **`500` carrying the SQL, the database file path and a full stack trace**.
-
-- **`422 validation_failed`** — the ordinary duplicate. The payload is wrong and the caller must change it.
-- **`409 conflict`** — the race. The payload was not wrong; it lost. The caller should retry, not edit.
-
-`Illuminate\Database\UniqueConstraintViolationException` is the arm that catches the second.
-
-**Known limit.** It is the *only* constraint violation Laravel narrows into its own class. A foreign-key violation — the `restrictOnDelete` on `assessments.skill_id`, for instance — is still a bare `QueryException` and would leave the envelope as a `500`. No endpoint can reach it today because nothing deletes, but it is an open hole in the claim that every failure path uses the envelope.
-
-### What the API does **not** enforce
-
-Day 12 answers three questions and no more: *is this payload well-formed*, *is this your call*, and *what does the response look like*. Every rule about **when** something may happen belongs to `ProgrammeProgressionService` on Day 13, and none of it is implemented here:
-
-- plan transitions, and a completed plan never reopening
-- activation requiring a baseline for every skill on the plan
-- baseline immutability once the plan is active
-- weekly entry transitions, and a closed week being read-only
-- contiguous week numbers
-- a `final` requiring a matching `baseline`
-- writing the final set and completing the plan in one transaction
-- refusing to deactivate a skill that is the focus of an open week
-
-Two of these are visible in today's evidence behaving in ways Day 13 must stop: a `final` was accepted on a plan with no matching baseline, and a closed week is still editable. They are recorded rather than hidden.
-
-Keeping the two apart is what makes a `403` mean *not your call* and a `422` mean *not this payload* — never *not yet*. An error a user cannot act on is worse than no error at all.
-
-### Measured cost
-
-Queries per request, measured through the real kernel with authentication warmed up:
-
-| Endpoint | Queries |
-|---|---|
-| `GET /api/skills` | 2 |
-| `GET /api/plans` | 3, whether it returns one plan or four |
-| `GET /api/plans/{plan}` | 5–6, whether the plan holds 3 assessments or 12 |
-
-The plan read traverses the same rows lazily in **22 queries**. Eager loading in the controller and `whenLoaded()` in the Resources is what holds it at 6, and the Resource guard is the half that matters: a relation the controller forgets to load comes back as an absent key rather than as a query repeated once per row.
-
----
-
-*Section for the business rules (Day 13) follows as it is built.*
+Day 14's unaided three-minute teach-back and actual client-work transfer note
+must come from the learner. Do not infer them from generated implementation or
+automated test success.

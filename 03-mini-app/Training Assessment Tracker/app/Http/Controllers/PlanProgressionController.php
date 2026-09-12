@@ -13,7 +13,7 @@ class PlanProgressionController extends Controller
 {
     public function comparison(Request $request, DevelopmentPlan $plan, ProgrammeProgressionService $service): JsonResponse
     {
-        return response()->json(['data' => $service->comparison($plan, $request->user())]);
+        return response()->json($service->comparison($plan, $request->user()));
     }
 
     public function activate(Request $request, DevelopmentPlan $plan, ProgrammeProgressionService $service): DevelopmentPlanResource

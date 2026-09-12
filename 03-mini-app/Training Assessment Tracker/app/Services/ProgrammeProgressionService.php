@@ -220,7 +220,7 @@ class ProgrammeProgressionService
             throw new ProgressionConflict('Recorded finals contain a skill without a baseline.');
         }
 
-        return $baselines->map(function ($baseline) use ($finals) {
+        $comparison = $baselines->map(function ($baseline) use ($finals) {
             $final = $finals->get($baseline->skill_id);
 
             return [
@@ -229,18 +229,10 @@ class ProgrammeProgressionService
                 'is_active' => $baseline->skill->is_active,
                 'baseline_score' => $baseline->score,
                 'final_score' => $final?->score,
-                'delta' => $final ? $this->delta($baseline->score, $final->score) : null,
             ];
         })->values()->all();
-    }
 
-    /** Stored DECIMAL casts are fixed two-place strings; subtract integer hundredths. */
-    private function delta(string $baseline, string $final): string
-    {
-        $difference = (int) str_replace('.', '', $final) - (int) str_replace('.', '', $baseline);
-        $absolute = abs($difference);
-
-        return ($difference < 0 ? '-' : '').intdiv($absolute, 100).'.'.str_pad((string) ($absolute % 100), 2, '0', STR_PAD_LEFT);
+        return (new ComparisonCalculator)->calculate($comparison);
     }
 
     private function requireState(DevelopmentPlan $plan, PlanStatus $expected): void
