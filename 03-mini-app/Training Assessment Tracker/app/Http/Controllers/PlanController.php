@@ -4,14 +4,37 @@ namespace App\Http\Controllers;
 
 use App\Enums\PlanStatus;
 use App\Http\Requests\IndexDevelopmentPlanRequest;
+use App\Http\Requests\StoreDevelopmentPlanRequest;
 use App\Http\Resources\DevelopmentPlanResource;
 use App\Models\DevelopmentPlan;
+use App\Models\User;
+use App\Services\ProgrammeProgressionService;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Support\Facades\Gate;
 
 class PlanController extends Controller
 {
+    public function store(StoreDevelopmentPlanRequest $request, ProgrammeProgressionService $service): JsonResponse
+    {
+        $plan = $service->createPlan($request->user(), $request->validated());
+
+        return (new DevelopmentPlanResource($plan->load('member', 'assessments.skill', 'weeklyEntries.skill')))
+            ->response()->setStatusCode(201);
+    }
+
+    public function eligibleMembers(Request $request): JsonResponse
+    {
+        Gate::authorize('create', DevelopmentPlan::class);
+        $request->validate(['page' => ['sometimes', 'integer', 'min:1'], 'search' => ['nullable', 'string', 'max:100']]);
+        $members = User::query()->where('role', 'member')->doesntHave('developmentPlan')
+            ->when($request->filled('search'), fn ($query) => $query->where('name', 'like', '%'.$request->input('search').'%'))
+            ->orderBy('id')->paginate(20, ['id', 'name'])->withQueryString();
+
+        return response()->json($members);
+    }
+
     /**
      * List plans.
      *
@@ -34,6 +57,8 @@ class PlanController extends Controller
         $plans = DevelopmentPlan::query()
             ->with('member')
             ->withCount(['assessments', 'weeklyEntries'])
+            ->withCount('baselineAssessments as skills_count')
+            ->withMin(['weeklyEntries as current_week' => fn ($query) => $query->whereIn('status', ['planned', 'evidenced'])], 'week_number')
             ->when(
                 ! $user->isAdministrator(),
                 fn ($query) => $query->where('user_id', $user->id)

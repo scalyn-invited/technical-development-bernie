@@ -35,6 +35,14 @@ class WeeklyEntryResource extends JsonResource
             'status' => $this->status->value,
             'recorded_by' => $this->recorded_by,
             'closed_at' => $this->closed_at,
+            'plan' => $this->whenLoaded('developmentPlan', fn () => [
+                'id' => $this->developmentPlan->id,
+                'status' => $this->developmentPlan->status->value,
+                'member' => [
+                    'id' => $this->developmentPlan->member->id,
+                    'name' => $this->developmentPlan->member->name,
+                ],
+            ]),
         ];
     }
 }

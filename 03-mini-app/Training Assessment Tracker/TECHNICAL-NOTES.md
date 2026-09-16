@@ -362,3 +362,18 @@ score audit trail, deletion API, plan-creation API or completed frontend was add
 Policies do not prevent privileged database access. Deployment-engine concurrency
 still requires verification/follow-up. ApiErrorEnvelopeTest verifies the generic
 500 response, retained reporting, SQL redaction, HTTP headers and HTML behavior.
+## Full-cycle UI/API completion — 15 September 2026
+
+- POST /api/plans: administrator only, 201. Fields: user_id, key_gaps,
+  weekly_focus, baselines[{skill_id,score,note?}]. Nonempty distinct active
+  skills; valid scores; existing member without a plan. Status and creator
+  cannot be supplied by the caller.
+- GET /api/members/eligible: administrator only, paginated 20, optional name
+  search/page. Returns only id/name for unassigned members.
+- Creation locks the member and writes plan/baselines in one transaction.
+  The existing unique user_id constraint remains the final duplicate guard.
+- Baseline rows continue to define membership; no new schema or migration.
+- Vue now exposes draft creation, baseline additions/corrections, activation,
+  sequential weeks, atomic final completion and member comparison.
+- Public registration continues to force the member role; no administrator
+  registration or privilege-changing UI was added.

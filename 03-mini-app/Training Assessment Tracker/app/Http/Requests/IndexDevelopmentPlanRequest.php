@@ -30,6 +30,7 @@ class IndexDevelopmentPlanRequest extends FormRequest
     public function rules(): array
     {
         return [
+            'page' => ['sometimes', 'integer', 'min:1'],
             'status' => ['sometimes', Rule::enum(PlanStatus::class)],
             'per_page' => ['sometimes', 'integer', 'between:1,100'],
         ];

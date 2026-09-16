@@ -17,6 +17,33 @@ use Illuminate\Support\Facades\Validator;
 
 class ProgrammeProgressionService
 {
+    public function createPlan(User $actor, array $data): DevelopmentPlan
+    {
+        Gate::forUser($actor)->authorize('create', DevelopmentPlan::class);
+
+        return DB::transaction(function () use ($actor, $data) {
+            // Lock the member so concurrent assignments serialize before creation.
+            $member = User::lockForUpdate()->findOrFail($data['user_id']);
+            if ($member->isAdministrator() || $member->id === $actor->id) {
+                throw new ProgressionConflict('Choose a member other than yourself.');
+            }
+            if ($member->developmentPlan()->exists()) {
+                throw new ProgressionConflict('This member already has a plan for this cycle.');
+            }
+            $plan = DevelopmentPlan::create([
+                'user_id' => $member->id, 'key_gaps' => $data['key_gaps'],
+                'weekly_focus' => $data['weekly_focus'], 'status' => PlanStatus::Draft,
+                'created_by' => $actor->id,
+            ]);
+            // Baselines define skill membership: no selected skill is saved unscored.
+            foreach (collect($data['baselines'])->sortBy('skill_id') as $baseline) {
+                $this->recordBaseline($plan, $actor, $baseline + ['type' => 'baseline']);
+            }
+
+            return $plan;
+        });
+    }
+
     // Every assessment write and transition locks the same parent row.
     public function activate(DevelopmentPlan $plan, User $actor): DevelopmentPlan
     {

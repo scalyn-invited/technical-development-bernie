@@ -44,6 +44,8 @@ class DevelopmentPlanResource extends JsonResource
 
             'assessments_count' => $this->whenCounted('assessments'),
             'weekly_entries_count' => $this->whenCounted('weeklyEntries'),
+            'skills_count' => $this->whenHas('skills_count'),
+            'current_week' => $this->whenHas('current_week'),
 
             'assessments' => AssessmentResource::collection($this->whenLoaded('assessments')),
             'weekly_entries' => WeeklyEntryResource::collection($this->whenLoaded('weeklyEntries')),

@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\AssessmentController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\OpenWeeksController;
 use App\Http\Controllers\PlanController;
 use App\Http\Controllers\PlanProgressionController;
 use App\Http\Controllers\SkillController;
@@ -24,6 +25,9 @@ Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:lo
 | returns the 401 envelope without one.
 */
 Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/weeks/open', OpenWeeksController::class);
+    Route::get('/members/eligible', [PlanController::class, 'eligibleMembers']);
+    Route::post('/plans', [PlanController::class, 'store']);
     Route::post('/plans/{plan}/activate', [PlanProgressionController::class, 'activate']);
     Route::post('/plans/{plan}/complete', [PlanProgressionController::class, 'complete']);
     Route::get('/plans/{plan}/comparison', [PlanProgressionController::class, 'comparison']);
